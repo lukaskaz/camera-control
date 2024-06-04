@@ -13,26 +13,19 @@
 #include <string>
 #include <vector>
 
-#define UART_DEV "/dev/ttyAMA0"
-#define SAMPLESPERSCAN 360
-#define ANGLESTOCHK {0, 45, 90, 135, 180, 225, 270, 315};
-
-#define SCANSTARTFLAG 0xA5
-//#define SCANGETINFOCMD 0x50
-#define SCANGETINFOCMD 65
-#define SCANGETSTATCMD 0x52
-#define SCANGETSRATECMD 0x59
-#define SCANSTARTSCAN 0x20
-#define SCANSTOPSCAN 0x25
-
 using json = nlohmann::json;
 
-std::string extractDataFromSerial(
-    std::shared_ptr<serial> serialIf,
-    std::tuple<std::string, std::string, uint32_t>&& params)
+static const std::string defaultDevice{"/dev/ttyAMA0"};
+
+std::string extractDataFromSerial(std::shared_ptr<serial> serialIf,
+                                  const std::string& cmd,
+                                  bool getHearbeat = false)
 {
-    const auto& [cmd, tag, maxsize] = params;
-    while (true)
+    constexpr uint32_t maxsize = 1024;
+    static const std::string heartbeattag{"{\"pa\":"};
+
+    uint32_t retries = 3;
+    while (retries--)
     {
         std::vector<uint8_t> tmpvec;
         serialIf->flushBuffer();
@@ -40,66 +33,120 @@ std::string extractDataFromSerial(
         serialIf->read(tmpvec, maxsize);
 
         std::string tmpstr{tmpvec.begin(), tmpvec.end()};
-        // std::cout << tmpstr << std::endl;
-        if (auto start = tmpstr.find("{\"" + tag + "\":");
-            start != std::string::npos)
+        if (!tmpstr.empty())
         {
-            if (auto end = tmpstr.find("}", start); end != std::string::npos)
+            std::vector<std::string> tmplist;
+            auto start = tmpstr.find("{"), end = tmpstr.find("}");
+            while (start != std::string::npos && end != std::string::npos)
             {
-                return tmpstr.substr(start, end + 1);
+                tmplist.push_back(tmpstr.substr(start, end + 1));
+                tmpstr.erase(start, end + 1);
+                start = tmpstr.find("{");
+                end = tmpstr.find("}");
+            }
+
+            for (auto&& obj : tmplist)
+            {
+                if (obj.find(heartbeattag) == std::string::npos || getHearbeat)
+                {
+                    return obj;
+                }
             }
         }
     }
     return {};
 }
 
+void displayJsonData(const json& json)
+{
+    for (const auto& [key, val] : json.items())
+    {
+        std::cout << key << ": " << val << '\n';
+    }
+}
+
 void readwifiinfo(std::shared_ptr<serial> serialIf)
 {
-    json jsoncmd = json::object({{"T", 65}});
-    auto output = extractDataFromSerial(serialIf, {jsoncmd.dump(), "IP", 150});
-    auto jsonData = json::parse(output);
-    std::cout << jsonData << std::endl;
-    std::cout << jsonData.at("AP_NAME") << std::endl;
+    auto jsoncmd = json::object({{"T", 65}});
+    auto output = extractDataFromSerial(serialIf, jsoncmd.dump());
+    displayJsonData(json::parse(output));
 }
 
 void readpowerinfo(std::shared_ptr<serial> serialIf)
 {
-    json jsoncmd = json::object({{"T", 70}});
-    auto output =
-        extractDataFromSerial(serialIf, {jsoncmd.dump(), "shunt_mV", 150});
-    auto jsonData = json::parse(output);
-    std::cout << jsonData << std::endl;
-    std::cout << jsonData.at("load_V") << std::endl;
+    auto jsoncmd = json::object({{"T", 70}});
+    auto output = extractDataFromSerial(serialIf, jsoncmd.dump());
+    displayJsonData(json::parse(output));
 }
 
 void readimuinfo(std::shared_ptr<serial> serialIf)
 {
-    json jsoncmd = json::object({{"T", 71}});
-    auto output =
-        extractDataFromSerial(serialIf, {jsoncmd.dump(), "temp", 250});
-    auto jsonData = json::parse(output);
-    std::cout << jsonData << std::endl;
-    std::cout << jsonData.at("temp") << std::endl;
+    auto jsoncmd = json::object({{"T", 71}});
+    auto output = extractDataFromSerial(serialIf, jsoncmd.dump());
+    displayJsonData(json::parse(output));
 }
 
 void readdeviceinfo(std::shared_ptr<serial> serialIf)
 {
-    json jsoncmd = json::object({{"T", 74}});
-    auto output = extractDataFromSerial(serialIf, {jsoncmd.dump(), "MAC", 30});
-    auto jsonData = json::parse(output);
-    std::cout << jsonData << std::endl;
-    std::cout << jsonData.at("MAC") << std::endl;
+    auto jsoncmd = json::object({{"T", 74}});
+    auto output = extractDataFromSerial(serialIf, jsoncmd.dump());
+    displayJsonData(json::parse(output));
 }
 
-const char* gettimestr(void)
+void readhearbeatinfo(std::shared_ptr<serial> serialIf)
 {
-    time_t rawtime = {0};
-    struct tm* timeinfo = {0};
+    auto output = extractDataFromSerial(serialIf, {}, true);
+    displayJsonData(json::parse(output));
+}
+
+void sendusercmd(std::shared_ptr<serial> serialIf)
+{
+    static const auto exitTag = "q";
+
+    std::cout << "Commands mode, to exit enter: " << exitTag << "\n";
+    while (true)
+    {
+        std::cout << "CMD> ";
+        std::string usercmd;
+        std::cin >> usercmd;
+        std::cin.clear();
+        std::cin.ignore(INT_MAX, '\n');
+
+        if (usercmd != exitTag)
+        {
+            try
+            {
+                auto jsoncmd = json::parse(usercmd);
+                auto output = extractDataFromSerial(serialIf, jsoncmd.dump());
+                if (!output.empty())
+                {
+                    displayJsonData(json::parse(output));
+                }
+            }
+            catch (const json::parse_error& e)
+            {
+                std::cerr << "Cannot covert string to json\n";
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+
+std::string gettimestr(void)
+{
+    time_t rawtime{0};
+    tm* timeinfo{0};
 
     time(&rawtime);
     timeinfo = localtime(&rawtime);
 
-    return asctime(timeinfo);
+    std::string timestr{asctime(timeinfo)};
+    timestr.erase(std::remove(timestr.begin(), timestr.end(), '\n'),
+                  timestr.end());
+    return timestr;
 }
 
 void exitprogram()
@@ -138,18 +185,21 @@ int main(int argc, char* argv[])
     }
 
     const auto& device =
-        vm.count("device") ? vm.at("device").as<std::string>() : UART_DEV;
+        vm.count("device") ? vm.at("device").as<std::string>() : defaultDevice;
     try
     {
         std::shared_ptr<serial> serialIf =
             std::make_shared<uart>(device, B115200);
 
-        Menu menu{"[JSON commands dispatcher on " + device + "]",
-                  {{"to get wifi info", std::bind(readwifiinfo, serialIf)},
-                   {"to get power info", std::bind(readpowerinfo, serialIf)},
-                   {"to get imu info", std::bind(readimuinfo, serialIf)},
-                   {"to get device info", std::bind(readdeviceinfo, serialIf)},
-                   {"exit", exitprogram}}};
+        Menu menu{
+            "[JSON commands " + gettimestr() + " @ " + device + "]",
+            {{"to get wifi info", std::bind(readwifiinfo, serialIf)},
+             {"to get power info", std::bind(readpowerinfo, serialIf)},
+             {"to get imu info", std::bind(readimuinfo, serialIf)},
+             {"to get device info", std::bind(readdeviceinfo, serialIf)},
+             {"to get heartneat info", std::bind(readhearbeatinfo, serialIf)},
+             {"to send user command", std::bind(sendusercmd, serialIf)},
+             {"exit", exitprogram}}};
 
         menu.run();
     }
