@@ -1,8 +1,9 @@
-name: Build check
+name: Check build/exec/tests
 
 on:
   schedule:
-    - cron: "0 8 * * *"
+    # Polish time: 6AM
+    - cron: "0 4 * * *"
   push:
     branches: [main]
   pull_request:
@@ -10,17 +11,6 @@ on:
       types: [opened, synchronize, reopened]
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    environment: test
-
-    steps:
-    - name: Checking out
-      uses: actions/checkout@v4
-    - name: Testing
-      run: echo "Testing"
-
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -37,12 +27,31 @@ jobs:
         mkdir build && cd build && cmake .. && make
       
   execution:
-    name: Report
+    name: Execution
+    needs: [build]
     runs-on: ubuntu-latest
     environment: production
 
     steps:
     - name: Checking out
       uses: actions/checkout@v4
+    - name: Preparing binary
+      run: |
+        mkdir build && cd build && cmake .. && make
     - name: Executing program
-      run: echo "Executing"
+      run: build/camera-control --help
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    environment: test
+
+    steps:
+    - name: Checking out
+      uses: actions/checkout@v4
+    - name: Building tests
+      run: |
+        cd tests && mkdir build && cd build && cmake .. && make
+    - name: Running tests
+      run: |
+        ctest --output-on-failure --test-dir tests/build/
