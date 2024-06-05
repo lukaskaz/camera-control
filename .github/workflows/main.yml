@@ -37,6 +37,7 @@ jobs:
       uses: actions/checkout@v4
     - name: Preparing binary
       run: |
+        sudo apt install libboost-program-options-dev
         mkdir build && cd build && cmake .. && make
     - name: Executing program
       run: build/camera-control --help
