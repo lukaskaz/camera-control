@@ -1,4 +1,4 @@
-name: Check build/exec/tests
+name: Check build/run/tests
 
 on:
   schedule:
